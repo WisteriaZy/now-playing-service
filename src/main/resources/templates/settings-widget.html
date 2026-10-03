@@ -7,10 +7,26 @@
 			content="width=device-width,height=device-height initial-scale=1" />
 	<title>歌曲组件 | Now Playing</title>
 	<link rel="icon" type="image/svg+xml" href="/assets/nowplaying.ico" />
-	<script type="module" crossorigin src="/assets/index-4783303a.js"></script>
+	<script id="widget-resource-check">
+		// The legacy widget bundle is excluded from the source repository.
+		// Keep a missing asset from leaving source/test builds as a blank page.
+		window.addEventListener('error', function (event) {
+			if (!event.target || !['legacy-widget-app', 'legacy-widget-style'].includes(event.target.id)) return;
+			function showResourceError() {
+				document.getElementById('widget-resource-error').hidden = false;
+				document.body.style.background = '#09090b';
+			}
+			if (document.readyState === 'loading') {
+				document.addEventListener('DOMContentLoaded', showResourceError, { once: true });
+			} else {
+				showResourceError();
+			}
+		}, true);
+	</script>
+	<script id="legacy-widget-app" type="module" crossorigin src="/assets/index-4783303a.js"></script>
 	<script src="/assets/jquery.min.js"></script>
 	<script src="/assets/jquery-ui.min.js"></script>
-	<link rel="stylesheet" href="/assets/index-ef1a3273.css">
+	<link id="legacy-widget-style" rel="stylesheet" href="/assets/index-ef1a3273.css">
 	<style>
 		body {
 			overflow: hidden;
@@ -51,6 +67,16 @@
 	</style>
 </head>
 <body>
+<section id="widget-resource-error" hidden role="alert" style="position:relative;z-index:1000;box-sizing:border-box;max-width:640px;margin:10vh auto;padding:32px;color:#e4e4e7;background:#18181b;border:1px solid #3f3f46;border-radius:16px;font-family:system-ui,sans-serif;line-height:1.8">
+	<h1 style="font-size:22px;margin:0 0 12px">歌曲组件设置资源未加载</h1>
+	<p>此页面依赖旧版组件设置资源，源码仓库没有包含这些文件，因此测试版无法完整显示该页面。这不是 SPlayer-Next 连接故障。</p>
+	<p>歌曲组件设置与播放器页面是两个独立页面。你仍可以查看播放器、调整播放器样式；旧版组件设置需使用包含完整资源的发行版。</p>
+	<nav style="display:flex;flex-wrap:wrap;gap:20px">
+		<a href="/player" style="color:#60a5fa">查看播放器</a>
+		<a href="/settings/player" style="color:#60a5fa">播放器设置</a>
+		<a href="/settings/general" style="color:#60a5fa">通用设置</a>
+	</nav>
+</section>
 <div id="root"></div>
 <div id="preview-div">
 	<iframe id="preview-iframe"></iframe>

@@ -31,6 +31,11 @@ public class SettingsController {
      */
     @PutMapping("/api/settings/general")
     public void settingsUpdate(@RequestBody SettingsGeneral settings) {
+        Integer port = settings.getSplayerNextPort();
+        if (port == null || port < 1 || port > 65535) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "SPlayer-Next 端口必须为 1–65535");
+        }
         settingsService.updateSettingsGeneral(settings);
     }
 

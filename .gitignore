@@ -16,3 +16,9 @@
 /src/main/resources/static/assets/index-4783303a.js
 /src/main/resources/static/assets/index-ef1a3273.css
 /Assets/cover_base64.txt
+
+# .NET build artifacts
+**/bin/
+**/obj/
+
+/test-build/

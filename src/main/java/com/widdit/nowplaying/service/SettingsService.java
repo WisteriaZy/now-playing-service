@@ -81,6 +81,12 @@ public class SettingsService {
             // 将 JSON 数据映射到 Settings 对象
             settings = jsonObject.toJavaObject(SettingsGeneral.class);
 
+            if (settings.getSplayerNextPort() == null || settings.getSplayerNextPort() < 1
+                    || settings.getSplayerNextPort() > 65535) {
+                settings.setSplayerNextPort(14558);
+                writeSettings(settings);
+            }
+
             // 如有字段异常，则进行修正
             if (settings.getUpdateCheckFreq() > 7 || settings.getUpdateCheckFreq() < 0) {
                 settings.setUpdateCheckFreq(7);
