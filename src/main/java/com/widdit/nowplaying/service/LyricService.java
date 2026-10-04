@@ -4,6 +4,11 @@ import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.TypeReference;
 import com.alibaba.fastjson.serializer.SerializerFeature;
 import com.widdit.nowplaying.entity.Lyric;
+import com.widdit.nowplaying.entity.TosuSnapshot;
+import com.widdit.nowplaying.component.LatestOnlyLoader;
+import com.widdit.nowplaying.event.SettingsGeneralChangedEvent;
+import com.widdit.nowplaying.event.CurrentPlatformChangedEvent;
+import javax.annotation.PreDestroy;
 import com.widdit.nowplaying.entity.SettingsLyric;
 import com.widdit.nowplaying.entity.SettingsLyricCommon;
 import com.widdit.nowplaying.event.LyricChangedEvent;
@@ -43,6 +48,17 @@ public class LyricService {
     private WeSingService weSingService;
     @Autowired
     private ApplicationEventPublisher eventPublisher;
+
+    // Separate guarded cache so a legacy in-flight lookup can never overwrite tosu lyrics.
+    private final LatestOnlyLoader<Lyric> tosuLyrics = new LatestOnlyLoader<>("tosu-lyrics", 600, () -> {
+        if (audioService != null && "tosu".equals(audioService.getCurrentPlatform())) {
+            eventPublisher.publishEvent(new LyricChangedEvent(this, "tosu lyrics ready"));
+        }
+    });
+    @PreDestroy
+    public void closeTosuLoader() { tosuLyrics.close(); }
+    @EventListener({SettingsGeneralChangedEvent.class, CurrentPlatformChangedEvent.class})
+    public void resetTosuLyrics(Object event) { tosuLyrics.clear(); }
 
     // 当前歌曲歌词
     private volatile Lyric lyric = new Lyric();
@@ -92,6 +108,13 @@ public class LyricService {
      * @return 歌词对象
      */
     public Lyric getLyric() {
+        if ("tosu".equals(audioService.getCurrentPlatform())) {
+            TosuSnapshot snapshot = audioService.getTosuSnapshot();
+            if (snapshot == null) { tosuLyrics.clear(); return new Lyric(); }
+            requestTosuLyrics(snapshot);
+            Lyric cached = tosuLyrics.get(tosuLyricKey(snapshot));
+            return cached == null ? createEmptyLyric(snapshot.windowTitle(), settingsCommon.getLyricSource()) : cached;
+        }
         String windowTitle = audioService.getWindowTitle();
         String status = audioService.getStatus();
 
@@ -209,6 +232,14 @@ public class LyricService {
      */
     @EventListener
     public void handleTrackChange(TrackChangedEvent event) {
+        if ("tosu".equals(audioService.getCurrentPlatform())) {
+            TosuSnapshot snapshot = audioService.getTosuSnapshot();
+            if (snapshot == null) tosuLyrics.clear();
+            else if (fetchLyricEnabled) requestTosuLyrics(snapshot);
+            // Immediately clear old lyrics; getLyric is non-blocking for this source.
+            if (fetchLyricEnabled) eventPublisher.publishEvent(new LyricChangedEvent(this, "tosu lyrics changed"));
+            return;
+        }
         // 歌曲发生改变，则更新歌词
         updateLyric();
     }
@@ -219,6 +250,7 @@ public class LyricService {
      */
     public void setFetchLyricEnabled(boolean fetchLyricEnabled) {
         this.fetchLyricEnabled = fetchLyricEnabled;
+        if (!fetchLyricEnabled) tosuLyrics.clear();
 
         // 当启用歌词获取时，如果当前歌词未准备好，则立即更新
         if (fetchLyricEnabled) {
@@ -465,6 +497,11 @@ public class LyricService {
      * 清除缓存标记，重新获取歌词并发布事件
      */
     public void forceRefreshLyric() {
+        if ("tosu".equals(audioService.getCurrentPlatform())) {
+            tosuLyrics.clear();
+            if (fetchLyricEnabled && audioService.getTosuSnapshot() != null) requestTosuLyrics(audioService.getTosuSnapshot());
+            return;
+        }
         if (!fetchLyricEnabled) {
             return;
         }
@@ -493,6 +530,10 @@ public class LyricService {
      * 更新歌词对象
      */
     private void updateLyric() {
+        if ("tosu".equals(audioService.getCurrentPlatform())) {
+            if (fetchLyricEnabled && audioService.getTosuSnapshot() != null) requestTosuLyrics(audioService.getTosuSnapshot());
+            return;
+        }
         if (!fetchLyricEnabled) {
             return;
         }
@@ -709,6 +750,18 @@ public class LyricService {
             return "main";
         }
         return id;
+    }
+
+    private String tosuLyricKey(TosuSnapshot snapshot) {
+        return snapshot.identity + "|" + settingsCommon.getLyricSource() + "|" + settingsCommon.getAutoSelectBestLyric();
+    }
+    private void requestTosuLyrics(TosuSnapshot snapshot) {
+        final String title = snapshot.windowTitle();
+        tosuLyrics.request(tosuLyricKey(snapshot), () -> {
+            fetchLock.lockInterruptibly();
+            try { return fetchLyric(title); }
+            finally { fetchLock.unlock(); }
+        });
     }
 
 }

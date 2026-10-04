@@ -57,6 +57,25 @@ public class SettingsApiChecks {
         if (JSON.parseObject("{\"platform\":\"netease\"}", SettingsGeneral.class).getSplayerNextPort() != 14558)
             throw new AssertionError("Legacy persisted settings default");
         checks++;
+        for (String value : new String[]{"0", "-1", "65536", "null", "\"invalid\""}) {
+            clearInvocations(service);
+            mvc.perform(put("/api/settings/general").contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"tosuPort\":" + value + "}"))
+                    .andExpect(status().isBadRequest());
+            verify(service, never()).updateSettingsGeneral(any());
+            checks++;
+        }
+        if (JSON.parseObject("{}", SettingsGeneral.class).getTosuPort() != 24050)
+            throw new AssertionError("Legacy tosu default");
+        checks++;
+        clearInvocations(service);
+        mvc.perform(put("/api/settings/general").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"platform\":\"tosu\",\"tosuPort\":25555}"))
+                .andExpect(status().isOk());
+        ArgumentCaptor<SettingsGeneral> tosu = ArgumentCaptor.forClass(SettingsGeneral.class);
+        verify(service).updateSettingsGeneral(tosu.capture());
+        if (tosu.getValue().getTosuPort() != 25555) throw new AssertionError("tosu port lost");
+        checks++;
         System.out.println("PASS: " + checks + " settings API and legacy configuration checks");
     }
 }

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../external_programs/AudioService/GetMusicStatus/MusicServices/TosuService.cs" Link="TosuService.cs" />
+    <Compile Include="../../external_programs/AudioService/GetMusicStatus/MusicServices/MusicService.cs" Link="MusicService.cs" />
+    <Reference Include="CSCore"><HintPath>../../Assets/AudioService/CSCore.dll</HintPath></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>../../Assets/AudioService/Newtonsoft.Json.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

@@ -1,6 +1,12 @@
 package com.widdit.nowplaying.service;
 
 import com.widdit.nowplaying.component.Timer;
+import com.widdit.nowplaying.component.LatestOnlyLoader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.io.InputStream;
+import java.util.Base64;
+import javax.annotation.PreDestroy;
 import com.widdit.nowplaying.entity.*;
 import com.widdit.nowplaying.event.*;
 import com.widdit.nowplaying.service.kugou.KuGouMusicService;
@@ -10,6 +16,7 @@ import com.widdit.nowplaying.service.netease.NeteaseMusicService;
 import com.widdit.nowplaying.service.qq.QQMusicService;
 import com.widdit.nowplaying.util.SongUtil;
 import com.widdit.nowplaying.util.TimeUtil;
+import com.widdit.nowplaying.util.TosuArtwork;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +32,18 @@ import java.util.Map;
 @Service
 @Slf4j
 public class NowPlayingService {
+
+    private volatile TosuSnapshot currentTosu;
+    private boolean tosuInitialized;
+    private final LatestOnlyLoader<String> tosuCover = new LatestOnlyLoader<>("tosu-cover", 600, () -> {
+        if (this.audioService != null && "tosu".equals(this.audioService.getCurrentPlatform()) && currentTosu != null) {
+            // Artwork requests already wait on this cache; no second Track event/reset is needed.
+            this.outputService.outputAsync(queryTrack());
+        }
+    });
+
+    @PreDestroy
+    public void closeTosuLoader() { tosuCover.close(); }
 
     // 播放器信息
     private Player player = new Player();
@@ -78,6 +97,10 @@ public class NowPlayingService {
      */
     @EventListener
     public void updateMusicInfo(MusicStatusUpdatedEvent event) {
+        if ("tosu".equals(audioService.getCurrentPlatform())) {
+            updateTosu(audioService.getTosuSnapshot());
+            return;
+        }
         SettingsGeneral settings = settingsService.getSettingsGeneral();
 
         // 获取音乐状态
@@ -215,6 +238,10 @@ public class NowPlayingService {
      * @return
      */
     public long getCurrentProgressMs() {
+        if ("tosu".equals(audioService.getCurrentPlatform())) {
+            TosuSnapshot snapshot = currentTosu;
+            return snapshot == null ? 0 : snapshot.positionMs;
+        }
         return timer.getTime();
     }
 
@@ -223,7 +250,11 @@ public class NowPlayingService {
      * @return
      */
     public Query query() {
-        return new Query(queryPlayer(), track);
+        if ("tosu".equals(audioService.getCurrentPlatform())) {
+            TosuSnapshot snapshot = currentTosu;
+            return new Query(tosuPlayer(snapshot), tosuTrack(snapshot));
+        }
+        return new Query(queryPlayer(), queryTrack());
     }
 
     /**
@@ -231,6 +262,9 @@ public class NowPlayingService {
      * @return
      */
     public Player queryPlayer() {
+        if ("tosu".equals(audioService.getCurrentPlatform())) {
+            return tosuPlayer(currentTosu);
+        }
         // 从计时器中实时获取进度条时间
         long progressMs = getCurrentProgressMs();
         int progressSec = (int) (progressMs / 1000);
@@ -258,6 +292,9 @@ public class NowPlayingService {
      * @return
      */
     public Track queryTrack() {
+        if ("tosu".equals(audioService.getCurrentPlatform())) {
+            return tosuTrack(currentTosu);
+        }
         return track;
     }
 
@@ -274,7 +311,7 @@ public class NowPlayingService {
      * @return
      */
     public RespData<Boolean> hasSong() {
-        return new RespData<>(player.getHasSong());
+        return new RespData<>(queryPlayer().getHasSong());
     }
 
     /**
@@ -282,15 +319,18 @@ public class NowPlayingService {
      * @return
      */
     public RespData<Boolean> isConnected() {
-        return new RespData<>(player.getHasSong());
+        return new RespData<>(queryPlayer().getHasSong());
     }
 
     /**
      * 监听通用设置被修改的事件
      * @param event
      */
-    @EventListener
-    public void handleSettingsGeneralChange(SettingsGeneralChangedEvent event) {
+    @EventListener({SettingsGeneralChangedEvent.class, CurrentPlatformChangedEvent.class})
+    public void handleSettingsGeneralChange(Object event) {
+        currentTosu = null;
+        tosuInitialized = false;
+        tosuCover.clear();
         // 清空歌曲状态
         player = new Player();
         track = new Track();
@@ -423,6 +463,104 @@ public class NowPlayingService {
         Track target = new Track();
         BeanUtils.copyProperties(source, target);
         return target;
+    }
+
+    private String coverKey(TosuSnapshot snapshot) {
+        return snapshot.identity + "|" + snapshot.coverUrl(settingsService.getSettingsGeneral().getTosuPort());
+    }
+
+    private void updateTosu(TosuSnapshot snapshot) {
+        TosuSnapshot previous = currentTosu;
+        boolean firstSnapshot = !tosuInitialized;
+        tosuInitialized = true;
+        currentTosu = snapshot;
+        if (snapshot == null) {
+            tosuCover.clear();
+            if (previous != null || firstSnapshot) {
+                eventPublisher.publishEvent(new TrackChangedEvent(this, "tosu disconnected"));
+                eventPublisher.publishEvent(new PlayerPauseStateChangedEvent(this, "tosu disconnected"));
+                outputService.outputAsync(new Track());
+            }
+            return;
+        }
+        String url = snapshot.coverUrl(settingsService.getSettingsGeneral().getTosuPort());
+        tosuCover.request(coverKey(snapshot), () -> loadTosuCover(url));
+        boolean changed = previous == null || !previous.identity.equals(snapshot.identity)
+                || !coverKey(previous).equals(coverKey(snapshot)) || previous.durationMs != snapshot.durationMs;
+        if (changed) {
+            eventPublisher.publishEvent(new TrackChangedEvent(this, "tosu song changed"));
+        }
+        if (changed || !previous.status.equals(snapshot.status)) {
+            eventPublisher.publishEvent(new PlayerPauseStateChangedEvent(this, "tosu pause changed"));
+        }
+        if (previous == null || previous.positionMs != snapshot.positionMs) {
+            eventPublisher.publishEvent(new PlayerProgressSyncEvent(this, "tosu progress"));
+        }
+    }
+
+    /** Only image HTTP/conversion requests wait here; never the detector/status thread.
+     * Follows the latest selection so an old widget callback cannot fetch a departed song's cover.
+     */
+    public String awaitTosuCover(long timeoutMillis) {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        do {
+            if (!"tosu".equals(audioService.getCurrentPlatform())) return "";
+            TosuSnapshot snapshot = currentTosu;
+            if (snapshot == null) return "";
+            String key = coverKey(snapshot);
+            LatestOnlyLoader.LoadState<String> state = tosuCover.read(key);
+            TosuSnapshot current = currentTosu;
+            if (current == null) return "";
+            if (!key.equals(coverKey(current))) continue;
+            if (state.done) return state.value == null ? "" : state.value;
+            try { Thread.sleep(25); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); return ""; }
+        } while (System.nanoTime() < deadline);
+        return "";
+    }
+
+    private String loadTosuCover(String url) throws Exception {
+        if (url.isEmpty()) return "";
+        HttpURLConnection connection = (HttpURLConnection)new URL(url).openConnection(java.net.Proxy.NO_PROXY);
+        connection.setConnectTimeout(500);
+        connection.setReadTimeout(1500);
+        connection.setInstanceFollowRedirects(false);
+        try {
+            if (connection.getResponseCode() != 200) return "";
+            try (InputStream input = connection.getInputStream()) {
+                byte[] data = input.readNBytes(5 * 1024 * 1024 + 1);
+                if (data.length > 5 * 1024 * 1024) return "";
+                // Never rely on the MIME header: lazer's content-addressed files often have none.
+                String mime = TosuArtwork.detectMime(data);
+                if (mime == null) return "";
+                return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(data);
+            }
+        } finally { connection.disconnect(); }
+    }
+
+    private Player tosuPlayer(TosuSnapshot snapshot) {
+        Player result = new Player();
+        if (snapshot == null) return result;
+        int seconds = (int)(snapshot.positionMs / 1000);
+        result.setHasSong(true);
+        result.setIsPaused("Paused".equals(snapshot.status));
+        result.setSeekbarCurrentPosition(seconds);
+        result.setSeekbarCurrentPositionHuman(TimeUtil.getFormattedDuration(seconds));
+        result.setStatePercent(snapshot.durationMs > 0 ? Math.min(1.0, (double)snapshot.positionMs / snapshot.durationMs) : 0.0);
+        return result;
+    }
+
+    private Track tosuTrack(TosuSnapshot snapshot) {
+        Track result = new Track();
+        if (snapshot == null) return result;
+        result.setId(snapshot.identity);
+        result.setTitle(snapshot.title);
+        result.setAuthor(snapshot.artist == null ? "" : snapshot.artist);
+        int seconds = (int)(snapshot.durationMs / 1000);
+        result.setDuration(seconds);
+        result.setDurationHuman(TimeUtil.getFormattedDuration(seconds));
+        result.setCover(TosuArtwork.reference(coverKey(snapshot)));
+        return result;
     }
 
 }

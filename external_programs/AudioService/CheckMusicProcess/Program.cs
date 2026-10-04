@@ -29,6 +29,7 @@ namespace ProcessChecker
             { "miebo", "咩播" },
             { "yesplay", "YesPlayMusic" },
             { "splayer-next", "SPlayer-Next" },
+            { "tosu", "osu!|osu" },
             { "cider", "Cider" },
             { "wesing", "WeSing" },
             // 浏览器平台可能使用多种浏览器，用 "|" 分隔多个进程名，任一存在即视为运行中

@@ -1,6 +1,7 @@
 package com.widdit.nowplaying.service;
 
 import com.widdit.nowplaying.entity.Device;
+import com.widdit.nowplaying.entity.TosuSnapshot;
 import com.widdit.nowplaying.entity.RespData;
 import com.widdit.nowplaying.entity.SettingsGeneral;
 import com.widdit.nowplaying.entity.cmd.Args;
@@ -48,7 +49,10 @@ public class AudioService {
     // 上一次生效的当前音乐平台，用于判断 currentPlatform 是否发生变化
     private volatile String lastCurrentPlatform;
 
-    private Process getMusicStatusProcess;
+    private volatile TosuSnapshot tosuSnapshot;
+    public TosuSnapshot getTosuSnapshot() { return tosuSnapshot; }
+
+    private volatile Process getMusicStatusProcess;
     private Thread musicStatusReaderThread;
     private Thread processShutdownHook;
 
@@ -105,6 +109,9 @@ public class AudioService {
         if ("splayer-next".equals(getCurrentPlatform())) {
             options.add(new Option("--splayer-next-port", settingsGeneral.getSplayerNextPort().toString()));
         }
+        if ("tosu".equals(getCurrentPlatform())) {
+            options.add(new Option("--tosu-port", settingsGeneral.getTosuPort().toString()));
+        }
         Args args = new Args(options);
 
         List<String> command = ConsoleUtil.getCommand("Assets\\AudioService\\GetMusicStatus.exe", args);
@@ -118,6 +125,18 @@ public class AudioService {
 
             // 为了防止并发问题，在 Hook 内部使用局部变量捕获当前的进程对象
             final Process currentProc = getMusicStatusProcess;
+
+            // Keep the child's stderr pipe drained, including repeated API failures.
+            // Otherwise a full OS pipe can block the detector even when stdout is healthy.
+            Thread errorReader = new Thread(() -> {
+                try (BufferedReader errors = new BufferedReader(new InputStreamReader(
+                        currentProc.getErrorStream(), StandardCharsets.UTF_8))) {
+                    String error;
+                    while ((error = errors.readLine()) != null) log.debug("Music detector: {}", error);
+                } catch (IOException ignored) { }
+            }, "music-detector-errors");
+            errorReader.setDaemon(true);
+            errorReader.start();
 
             processShutdownHook = new Thread(() -> {
                 // 这里检查 currentProc 而不是成员变量，确保只处理本次启动的进程
@@ -139,6 +158,19 @@ public class AudioService {
                 String line;
                 try {
                     while ((line = reader.readLine()) != null) {
+                        if (currentProc != getMusicStatusProcess || Thread.currentThread().isInterrupted()) break;
+                        if ("tosu".equals(getCurrentPlatform()) && line.startsWith("Tosu:")) {
+                            try { tosuSnapshot = TosuSnapshot.parse(line.substring(5)); }
+                            catch (Exception invalid) { tosuSnapshot = null; }
+                            TosuSnapshot snapshot = tosuSnapshot;
+                            status = snapshot == null ? "None" : snapshot.status;
+                            windowTitle = snapshot == null ? "" : snapshot.windowTitle();
+                            progressSeconds = snapshot == null ? -1 : (int)(snapshot.positionMs / 1000);
+                            totalSeconds = snapshot == null ? -1 : (int)(snapshot.durationMs / 1000);
+                            try { eventPublisher.publishEvent(new MusicStatusUpdatedEvent(this, "tosu snapshot")); }
+                            catch (Exception e) { log.warn("tosu event failed", e); }
+                            continue;
+                        }
                         // 更新成员变量
                         if ("Playing".equals(line) || "Paused".equals(line) || "None".equals(line)) {
                             status = line.trim();
@@ -192,6 +224,7 @@ public class AudioService {
      * 结束 C# 程序 GetMusicStatus.exe
      */
     public void stopGetMusicStatus() {
+        tosuSnapshot = null;
         log.info("终止 C# 进程读取音乐状态");
 
         try {

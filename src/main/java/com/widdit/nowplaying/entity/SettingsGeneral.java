@@ -44,6 +44,9 @@ public class SettingsGeneral {
     // SPlayer-Next 本机外部 API 端口
     private Integer splayerNextPort = 14558;
 
+    // tosu 本机 v2 API 端口
+    private Integer tosuPort = 24050;
+
     // 全民 K 歌缓存目录
     private String weSingCachePath = "";
 

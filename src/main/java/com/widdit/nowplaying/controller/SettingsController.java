@@ -36,6 +36,11 @@ public class SettingsController {
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatus.BAD_REQUEST, "SPlayer-Next 端口必须为 1–65535");
         }
+        Integer tosuPort = settings.getTosuPort();
+        if (tosuPort == null || tosuPort < 1 || tosuPort > 65535) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "tosu 端口必须为 1–65535");
+        }
         settingsService.updateSettingsGeneral(settings);
     }
 

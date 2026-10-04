@@ -87,6 +87,10 @@ public class SettingsService {
                 writeSettings(settings);
             }
 
+            if (settings.getTosuPort() == null || settings.getTosuPort() < 1 || settings.getTosuPort() > 65535) {
+                settings.setTosuPort(24050);
+                writeSettings(settings);
+            }
             // 如有字段异常，则进行修正
             if (settings.getUpdateCheckFreq() > 7 || settings.getUpdateCheckFreq() < 0) {
                 settings.setUpdateCheckFreq(7);

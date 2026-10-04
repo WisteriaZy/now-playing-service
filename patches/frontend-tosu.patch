@@ -1,0 +1,306 @@
+--- a/src/pages/SettingsGeneral.tsx
++++ b/src/pages/SettingsGeneral.tsx
+@@ -34,6 +34,7 @@
+ 
+ import PlatformHelpDrawer from "@/components/PlatformHelpDrawer";
+ import SPlayerNextSettings from "@/components/SPlayerNextSettings";
++import TosuSettings from "@/components/TosuSettings";
+ import { SpotifyIcon, YouTubeMusicIcon } from "@/components/Icons";
+ import { PLATFORM_MAP } from "@/constants/platformMap";
+ import { Sparkles } from "@/components/animate-icons/Sparkles";
+@@ -47,7 +48,7 @@
+   foreign: ["spotify", "apple", "youtube"],
+   jukebox: ["miebo", "ayna", "huahua", "bq"],
+   local: ["potplayer", "foobar", "aimp", "salt"],
+-  other: ["lx", "musicfree", "cider", "yesplay", "splayer-next", "browser"],
++  other: ["lx", "musicfree", "cider", "yesplay", "splayer-next", "tosu", "browser"],
+ };
+ 
+ // 音乐平台分组名称
+@@ -169,6 +170,7 @@
+   const [pollInterval, setPollInterval] = useState<Set<Key>>();
+   const [weSingCachePath, setWeSingCachePath] = useState<string>();
+   const [splayerNextPort, setSplayerNextPort] = useState(14558);
++  const [tosuPort, setTosuPort] = useState(24050);
+ 
+   const [isDetecting, setIsDetecting] = useState<boolean>(false);
+   const [isConnected, setIsConnected] = useState<boolean>(false);
+@@ -243,6 +245,7 @@
+       pollInterval: currentPollInterval,
+       weSingCachePath,
+       splayerNextPort,
++      tosuPort,
+       ...newSettings,
+     };
+ 
+@@ -340,6 +343,7 @@
+         setWeSingCachePath(data.weSingCachePath);
+         const port = data.splayerNextPort ?? 14558;
+         setSplayerNextPort(port);
++        setTosuPort(data.tosuPort ?? 24050);
+ 
+       } catch (err: any) {
+         console.error("通用设置加载失败", err);
+@@ -421,6 +425,12 @@
+   const saveSplayerPort = async (port: number) => {
+     if (!await saveSettings({ splayerNextPort: port })) return false;
+     setSplayerNextPort(port);
++    return true;
++  };
++
++  const saveTosuPort = async (port: number) => {
++    if (!await saveSettings({ tosuPort: port })) return false;
++    setTosuPort(port);
+     return true;
+   };
+ 
+@@ -903,6 +913,11 @@
+                   onClick={changePlatform}
+                 />
+                 <Tab
++                  key="tosu"
++                  title={<TabTitle icon={<span className="text-xs font-bold">osu!</span>} label="osu!（tosu）" />}
++                  onClick={changePlatform}
++                />
++                <Tab
+                   key="browser"
+                   title={<TabTitle icon={<Globe size={18} />} label="浏览器" />}
+                   onClick={changePlatform}
+@@ -910,6 +925,9 @@
+               </Tabs>
+               <AnimatedRow show={initialized && platform === "splayer-next"}>
+                 <SPlayerNextSettings port={splayerNextPort} onSave={saveSplayerPort} />
++              </AnimatedRow>
++              <AnimatedRow show={initialized && platform === "tosu"}>
++                <TosuSettings port={tosuPort} onSave={saveTosuPort} />
+               </AnimatedRow>
+             </div>
+           </AnimatedRow>
+@@ -1081,11 +1099,11 @@
+             <div className="flex flex-col gap-[2px]">
+               <span>优先使用 SMTC</span>
+               <span className="text-color-desc text-sm">
+-                {platform === "splayer-next" ? "SPlayer-Next 固定通过本机 HTTP API 识别，此开关不生效" : "能够保证封面和音乐软件中的完全一致"}
++                {platform === "tosu" ? "tosu 固定通过本机 HTTP API 识别，此开关不生效" : platform === "splayer-next" ? "SPlayer-Next 固定通过本机 HTTP API 识别，此开关不生效" : "能够保证封面和音乐软件中的完全一致"}
+               </span>
+             </div>
+             <Switch
+-              isDisabled={platform === "splayer-next"}
++              isDisabled={platform === "splayer-next" || platform === "tosu"}
+               isSelected={smtc}
+               onValueChange={(val) => {
+                 setSmtc(val);
+@@ -1180,6 +1198,10 @@
+           <AnimatedRow show={initialized && !!fallbackPlatformEnabled
+             && fallbackPlatform?.has("splayer-next") === true && platform !== "splayer-next"}>
+             <SPlayerNextSettings port={splayerNextPort} onSave={saveSplayerPort} />
++          </AnimatedRow>
++          <AnimatedRow show={initialized && !!fallbackPlatformEnabled
++            && fallbackPlatform?.has("tosu") === true && platform !== "tosu"}>
++            <TosuSettings port={tosuPort} onSave={saveTosuPort} />
+           </AnimatedRow>
+ 
+           <Divider />
+--- a/src/constants/platformMap.ts
++++ b/src/constants/platformMap.ts
+@@ -18,6 +18,7 @@
+   miebo: "咩播",
+   yesplay: "YesPlayMusic",
+   "splayer-next": "SPlayer-Next",
++  tosu: "osu!（tosu）",
+   cider: "Cider",
+   wesing: "全民K歌",
+   browser: "浏览器",
+--- /dev/null
++++ b/src/components/TosuSettings.tsx
+@@ -0,0 +1,95 @@
++import { useEffect, useId, useState } from "react";
++import { Button } from "@heroui/button";
++import { Input } from "@heroui/input";
++import { Tooltip } from "@heroui/tooltip";
++import { QuestionCircle } from "@mynaui/icons-react";
++import { Save } from "lucide-react";
++
++interface Props {
++  port: number;
++  onSave: (port: number) => Promise<boolean>;
++}
++
++export default function TosuSettings({ port, onSave }: Props) {
++  const id = useId();
++  const [draft, setDraft] = useState(String(port));
++  const [saving, setSaving] = useState(false);
++  const valid = /^\d+$/.test(draft) && Number(draft) >= 1 && Number(draft) <= 65535;
++
++  useEffect(() => setDraft(String(port)), [port]);
++
++  const save = async () => {
++    if (!valid || saving || Number(draft) === port) return;
++    setSaving(true);
++    try {
++      await onSave(Number(draft));
++    } finally {
++      setSaving(false);
++    }
++  };
++
++  return (
++    <div className="flex flex-col gap-3 mt-4">
++      <div className="flex items-center text-primary-900 text-xs font-bold leading-none">
++        <label htmlFor={id}>tosu API 端口</label>
++        <Tooltip
++          className="px-3 py-2 max-w-xs"
++          closeDelay={200}
++          delay={200}
++          placement="right"
++          content={
++            <div className="flex flex-col gap-1 text-xs leading-5 font-normal">
++              <span className="font-bold">连接 osu!（tosu）</span>
++              <span>先启动 tosu 和 osu!，端口与 tosu 保持一致，默认 24050。</span>
++              <span>仅连接本机 127.0.0.1 的 v2 HTTP API，无需开启游戏内 Overlay。</span>
++              <span>支持菜单与选歌试听、打图和回放。不使用 SMTC；快速切歌时只加载稳定后的最新封面和歌词。</span>
++              <span>未检测到歌曲时请检查端口，以及 tosu 是否已识别 osu!。缺少暂停字段的旧版本会依据进度停滞判断暂停。</span>
++            </div>
++          }
++        >
++          <button type="button" aria-label="tosu 连接帮助" className="ml-1 flex items-center cursor-pointer shrink-0 rounded focus-visible:outline-primary">
++            <QuestionCircle size={14} />
++          </button>
++        </Tooltip>
++      </div>
++      <div className="flex gap-2">
++        <Input
++          id={id}
++          aria-label="tosu API 端口"
++          className="max-w-full w-full font-poppins"
++          classNames={{ inputWrapper: "px-4" }}
++          size="lg"
++          type="number"
++          min={1}
++          max={65535}
++          step={1}
++          value={draft}
++          onValueChange={setDraft}
++          isDisabled={saving}
++          isInvalid={!valid}
++          errorMessage="请输入 1–65535 之间的整数端口"
++          onKeyDown={(event) => {
++            if (event.key === "Enter") {
++              event.preventDefault();
++              void save();
++            }
++          }}
++        />
++        <Tooltip className="px-3" closeDelay={200} content="保存端口并重新连接" delay={200} placement="top">
++          <Button
++            aria-label="保存端口并重新连接"
++            isIconOnly
++            size="lg"
++            variant="flat"
++            className="bg-default-100 hover:bg-[#212123]"
++            isLoading={saving}
++            isDisabled={!valid || Number(draft) === port || saving}
++            onPress={save}
++          >
++            <Save size={20} strokeWidth={1.5} />
++          </Button>
++        </Tooltip>
++      </div>
++    </div>
++  );
++}
+--- /dev/null
++++ b/verification/tosu-ui.test.tsx
+@@ -0,0 +1,92 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import GeneralSettingsPage from "../src/pages/SettingsGeneral";
++import TosuSettings from "../src/components/TosuSettings";
++
++vi.mock("@/contexts/EnvContext", () => ({ useEnv: () => ({ isDesktop: false }) }));
++vi.mock("@/hooks/useOpenExternalUrl", () => ({ useOpenExternalUrl: () => ({ openExternalUrl: vi.fn() }) }));
++vi.mock("@/components/PlatformHelpDrawer", () => ({ default: () => null }));
++vi.mock("@heroui/toast", () => ({ addToast: vi.fn() }));
++
++// jsdom has no layout/animation engine; test visibility transitions without exit animations.
++vi.mock("framer-motion", async (original) => ({
++  ...await original<typeof import("framer-motion")>(),
++  AnimatePresence: ({ children }: { children: import("react").ReactNode }) => children,
++}));
++
++let selected = "tosu";
++let writes: Record<string, unknown>[] = [];
++beforeEach(() => {
++  selected = "tosu";
++  writes = [];
++  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
++    if (init?.method === "PUT") writes.push(JSON.parse(init.body as string));
++    const data = url === "/api/audio/devices" ? [{ id: "default", name: "Default" }]
++      : url === "/api/settings/general" ? { platform: selected, deviceId: "default", autoLaunchHomePage: false,
++        runAtStartup: false, updateCheckFreq: 7, smtc: true, fallbackPlatformEnabled: false,
++        fallbackPlatform: "netease", pollInterval: 100, weSingCachePath: "", tosuPort: 24050 }
++      : { data: false };
++    return { ok: true, json: async () => data };
++  }));
++});
++afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
++
++describe("SPlayer platform selection", () => {
++  it("keeps Other and its saved configuration in More, with an accurate selected tab", async () => {
++    render(<GeneralSettingsPage />);
++    await screen.findByText("当前：osu!（tosu）");
++    expect(screen.queryByRole("tab", { name: /osu!（tosu）/ })).toBeNull();
++    expect(screen.queryByRole("spinbutton", { name: "tosu API 端口" })).toBeNull();
++    fireEvent.click(screen.getByRole("button", { name: /更多/ }));
++    const tab = await screen.findByRole("tab", { name: /osu!（tosu）/ });
++    expect(tab.getAttribute("aria-selected")).toBe("true");
++    await screen.findByRole("spinbutton", { name: "tosu API 端口" }, { timeout: 3000 });
++    expect(writes).toHaveLength(0); // loading saved settings must not save/reset them
++    fireEvent.click(screen.getByRole("tab", { name: /MusicFree/ }));
++    await waitFor(() => expect(screen.queryByRole("spinbutton", { name: "tosu API 端口" })).toBeNull());
++    fireEvent.click(tab);
++    await screen.findByRole("spinbutton", { name: "tosu API 端口" });
++    expect(tab.getAttribute("aria-selected")).toBe("true");
++    fireEvent.click(screen.getByRole("button", { name: "收起" }));
++    await waitFor(() => expect(screen.queryByRole("tab", { name: /osu!（tosu）/ })).toBeNull());
++    expect(screen.queryByRole("spinbutton", { name: "tosu API 端口" })).toBeNull();
++  });
++
++  it("does not show SPlayer settings for another saved platform, even after expanding", async () => {
++    selected = "netease";
++    render(<GeneralSettingsPage />);
++    fireEvent.click(screen.getByRole("button", { name: "更多" }));
++    const tab = await screen.findByRole("tab", { name: /osu!（tosu）/ });
++    expect(tab.getAttribute("aria-selected")).toBe("false");
++    expect(screen.queryByRole("spinbutton", { name: "tosu API 端口" })).toBeNull();
++  });
++});
++
++describe("compact port configuration", () => {
++  it("validates ports and only saves explicitly; keeps the draft on failure", async () => {
++    const save = vi.fn(async () => false);
++    render(<TosuSettings port={24050} onSave={save} />);
++    const input = screen.getByRole("spinbutton");
++    const button = screen.getByRole("button", { name: "保存端口并重新连接" });
++    expect(button.hasAttribute("disabled")).toBe(true);
++    for (const invalid of ["", "0", "65536", "1.5"]) {
++      fireEvent.change(input, { target: { value: invalid } });
++      expect(button.hasAttribute("disabled")).toBe(true);
++    }
++    fireEvent.change(input, { target: { value: "15555" } });
++    expect(save).not.toHaveBeenCalled();
++    fireEvent.click(button);
++    await waitFor(() => expect(save).toHaveBeenCalledWith(15555));
++    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
++    expect((input as HTMLInputElement).value).toBe("15555");
++  });
++
++  it("shows setup instructions in the help tooltip, not as permanent paragraphs", async () => {
++    render(<TosuSettings port={24050} onSave={vi.fn()} />);
++    expect(screen.queryByText(/先启动 tosu 和 osu!/)).toBeNull();
++    const user = userEvent.setup();
++    await user.tab();
++    await screen.findByText(/先启动 tosu 和 osu!/);
++  });
++});

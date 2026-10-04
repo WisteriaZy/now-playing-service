@@ -4,6 +4,8 @@ import com.widdit.nowplaying.entity.Base64Img;
 import com.widdit.nowplaying.entity.SettingsGeneral;
 import com.widdit.nowplaying.event.SettingsGeneralChangedEvent;
 import com.widdit.nowplaying.util.SongMatchingUtil;
+import com.widdit.nowplaying.util.TosuArtwork;
+import org.springframework.context.annotation.Lazy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
@@ -31,6 +33,10 @@ import java.util.stream.Collectors;
 public class CoverService {
 
     @Autowired
+    @Lazy
+    private NowPlayingService nowPlayingService;
+
+    @Autowired
     private SettingsService settingsService;
 
     /** 是否应该读取本地图片 */
@@ -54,6 +60,15 @@ public class CoverService {
      * @return Base64Img 对象
      */
     public Base64Img convertToBase64(String coverUrl) {
+        if (TosuArtwork.isReference(coverUrl)) {
+            String image = nowPlayingService.awaitTosuCover(5000);
+            if (!image.isEmpty()) return new Base64Img(image);
+            try { return new Base64Img(Files.readString(Paths.get("Assets", "no_cover_base64.txt"))); }
+            catch (Exception e) { return new Base64Img(""); }
+        }
+        if (coverUrl != null && coverUrl.startsWith("data:image/") && coverUrl.contains(";base64,")) {
+            return new Base64Img(coverUrl);
+        }
         InputStream inputStream = null;
         ByteArrayOutputStream outputStream = null;
         Base64Img base64Img = null;

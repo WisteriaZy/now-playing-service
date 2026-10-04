@@ -9,6 +9,11 @@ import com.widdit.nowplaying.service.NowPlayingService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import com.widdit.nowplaying.util.TosuArtwork;
+import java.util.Base64;
 
 @RestController
 @Slf4j
@@ -79,6 +84,19 @@ public class NowPlayingController {
     @PostMapping({"/cover/videoUrl", "/api/cover/videoUrl"})
     public String videoUrl(@RequestBody CoverVideoDTO coverVideoDTO) {
         return coverService.getVideoUrl(coverVideoDTO.getSongTitle(), coverVideoDTO.getSongAuthor());
+    }
+
+    /** Live image resource, including for clients that fetch artwork only once on song change. */
+    @GetMapping(TosuArtwork.RESOURCE_PATH)
+    public ResponseEntity<byte[]> tosuArtwork() {
+        String image = coverService.convertToBase64(TosuArtwork.RESOURCE_PATH).getBase64Img();
+        if (image == null || !image.startsWith("data:image/") || !image.contains(";base64,")) {
+            return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
+        }
+        int separator = image.indexOf(";base64,");
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .contentType(MediaType.parseMediaType(image.substring(5, separator)))
+                .body(Base64.getDecoder().decode(image.substring(separator + 8)));
     }
 
     /**
